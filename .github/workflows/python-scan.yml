@@ -1,0 +1,118 @@
+name: Python Code Scan and Report
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  scan-python-code:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Linters
+        run: |
+          pip install bandit pylint flake8 flake8-json
+
+      - name: Run Bandit on all Python files
+        run: |
+          bandit -r . -f json -o bandit.json || true
+
+      - name: Run Pylint on all Python files
+        run: |
+          find . -name "*.py" > files.txt
+          pylint $(cat files.txt) --output-format=json > pylint.json || true
+
+      - name: Run Flake8 on all Python files
+        run: |
+          flake8 . --format=json --output-file=flake8.json || true
+
+      - name: Convert JSON Results to CSV
+        run: |
+          import json
+          import csv
+
+          def parse_bandit():
+              try:
+                  with open("bandit.json") as f:
+                      data = json.load(f)
+                  rows = []
+                  for result in data.get("results", []):
+                      rows.append([
+                          "bandit",
+                          result.get("filename", ""),
+                          result.get("line_number", ""),
+                          result.get("issue_severity", ""),
+                          result.get("issue_text", ""),
+                          result.get("test_id", ""),
+                          "Security"
+                      ])
+                  return rows
+              except Exception as e:
+                  print("Bandit parse error:", e)
+                  return []
+
+          def parse_pylint():
+              try:
+                  with open("pylint.json") as f:
+                      data = json.load(f)
+                  rows = []
+                  for item in data:
+                      rows.append([
+                          "pylint",
+                          item.get("path", ""),
+                          item.get("line", ""),
+                          item.get("type", "").capitalize(),
+                          item.get("message", ""),
+                          item.get("message-id", ""),
+                          "Code Quality"
+                      ])
+                  return rows
+              except Exception as e:
+                  print("Pylint parse error:", e)
+                  return []
+
+          def parse_flake8():
+              try:
+                  with open("flake8.json") as f:
+                      data = json.load(f)
+                  rows = []
+                  for file, issues in data.items():
+                      for issue in issues:
+                          rows.append([
+                              "flake8",
+                              file,
+                              issue.get("line_number", ""),
+                              "Style",
+                              issue.get("text", ""),
+                              issue.get("code", ""),
+                              "Style"
+                          ])
+                  return rows
+              except Exception as e:
+                  print("Flake8 parse error:", e)
+                  return []
+
+          all_violations = [["Tool", "File", "Line", "Severity", "Message", "Rule/Code", "Category"]]
+          all_violations += parse_bandit()
+          all_violations += parse_pylint()
+          all_violations += parse_flake8()
+
+          with open("violation-report.csv", "w", newline="") as f:
+              writer = csv.writer(f)
+              writer.writerows(all_violations)
+        shell: python
+
+      - name: Upload Violation Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-violation-report
+          path: violation-report.csv
